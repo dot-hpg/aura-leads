@@ -415,7 +415,7 @@ textarea.inp{height:auto;min-height:96px;padding:10px 12px;resize:vertical;line-
       </div>
     </div>
   </header>
-  <div class="demo-bar" id="demoBar" hidden><div class="wrap"><b>Sample leads.</b> These are made-up customers so you can try everything. Nothing here is saved to your sheet. <button class="linkish" id="demoExit" type="button">Sign in for real leads</button></div></div>
+  <div class="demo-bar" id="demoBar" hidden><div class="wrap"><b>Sample leads.</b> These are made-up customers so you can try everything. Nothing you change here is saved. <button class="linkish" id="demoExit" type="button">Sign in for real leads</button></div></div>
 
   <main class="wrap" id="main">
     <section class="hello">
@@ -509,12 +509,11 @@ textarea.inp{height:auto;min-height:96px;padding:10px 12px;resize:vertical;line-
       <div class="list-f">
         <span id="countTxt"></span>
         <span style="display:flex;gap:8px;flex-wrap:wrap">
-          <a class="btn btn-ghost btn-sm" id="sheetLink" href="#" target="_blank" rel="noopener" hidden><svg class="ico"><use href="#i-sheet"/></svg>Open the sheet</a>
           <button class="btn btn-ghost btn-sm" id="csvBtn" type="button"><svg class="ico"><use href="#i-down"/></svg>Download CSV</button>
         </span>
       </div>
     </section>
-    <p class="foot">AURA Smart Homes · private owner dashboard</p>
+    <p class="foot">AURA Smart Homes · private owner dashboard · <button type="button" class="linkish" id="outAll" style="font-size:inherit;color:var(--faint)">Sign out on all devices</button></p>
   </main>
 </div>
 
@@ -533,7 +532,7 @@ textarea.inp{height:auto;min-height:96px;padding:10px 12px;resize:vertical;line-
   </div>
   <div class="sh-b" id="shBody"></div>
   <div class="sh-f">
-    <span class="note" id="shNote">Changes save to your Google Sheet.</span>
+    <span class="note" id="shNote"><button type="button" class="linkish" id="shDel" style="color:var(--bad)">Delete lead</button></span>
     <button class="btn btn-primary" id="shSave" type="button">Save</button>
   </div>
 </aside>
@@ -543,8 +542,8 @@ textarea.inp{height:auto;min-height:96px;padding:10px 12px;resize:vertical;line-
 
 <script>
 /* ===== Settings =====
-   API: the AURA enquiries sheet's web app link (the same /exec link the website uses). */
-const API = "https://script.google.com/macros/s/AKfycbxtgylYxU6-8qbRWLPtg31eIkzbvrg_wygrHbOiTcwzexEFNNEAVz3XuhwjNB-8yBW9JQ/exec";
+   API: this site's own private lead service (api/dash.js). The website form posts to api/lead.js. */
+const API = "/api/dash";
 const START_IN_DEMO = false;
 const POLL_MS = 30000;
 
@@ -584,9 +583,9 @@ function rupeesShort(n) {
   return rupees(n);
 }
 const phoneFmt = p => p ? "+91 " + p.slice(0, 5) + " " + p.slice(5) : "";
-const plain = s => String(s || "").replace(/^[^\p{L}\p{N}]+/u, "").trim();   // drops the emoji the sheet puts in front
+const plain = s => String(s || "").replace(/^[^\p{L}\p{N}]+/u, "").trim();   // drops any emoji in front of a label
 
-/* Status model (names match the sheet's dropdowns) */
+/* Status model (keys match api/_lib.js STATUSES) */
 const STATUS = [
   { key: "new", label: "New", step: 0 }, { key: "called", label: "Called", step: 1 }, { key: "visitfixed", label: "Visit fixed", step: 2 },
   { key: "visited", label: "Visited", step: 3 }, { key: "quotesent", label: "Quote sent", step: 4 }, { key: "negotiating", label: "Negotiating", step: 5 },
@@ -594,8 +593,8 @@ const STATUS = [
 ];
 const SDEF = {}; STATUS.forEach(s => SDEF[s.key] = s);
 const skey = s => plain(s).toLowerCase().replace(/[^a-z]/g, "") || "new";
-let SHEET_STATUS = { new: "🆕 New", called: "📞 Called", visitfixed: "📅 Visit fixed", visited: "🏠 Visited", quotesent: "📝 Quote sent", negotiating: "🤝 Negotiating", won: "✅ Won", lost: "❌ Lost", noresponse: "💤 No response" };
-let SHEET_PRIO = { hot: "🔥 Hot", warm: "🌤 Warm", cold: "❄️ Cold" };
+const SHEET_STATUS = { new: "new", called: "called", visitfixed: "visitfixed", visited: "visited", quotesent: "quotesent", negotiating: "negotiating", won: "won", lost: "lost", noresponse: "noresponse" };
+const SHEET_PRIO = { hot: "hot", warm: "warm", cold: "cold" };
 const pkey = p => plain(p).toLowerCase() || "";
 const isOpen = l => !["won", "lost"].includes(l.s);
 
@@ -631,10 +630,11 @@ function normalise(l) {
 /* ===== API ===== */
 async function api(action, body = {}) {
   if (S.demo) return demoApi(action, body);
-  const r = await fetch(API, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(Object.assign({ action, token: S.token }, body)), cache: "no-store", redirect: "follow" });
-  if (!r.ok) throw new Error("The sheet did not answer (" + r.status + ")");
-  const j = await r.json();
-  if (j && j.auth === false) { signOut(true); throw new Error("Please sign in again."); }
+  const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ action, token: S.token }, body)), cache: "no-store" });
+  let j = null;
+  try { j = await r.json(); } catch (_) {}
+  if (j && j.auth === false) { if (action !== "login") signOut(true); throw new Error("Please sign in again."); }
+  if (!j) throw new Error("The lead service did not answer (" + r.status + ").");
   return j;
 }
 
@@ -714,9 +714,7 @@ async function refresh() {
     const j = await api("leads");
     if (!j.ok) throw new Error(j.error || "Could not load leads");
     S.serverNow = j.now ? new Date(j.now).getTime() : Date.now();
-    S.team = j.team || []; S.greeting = j.greeting || ""; S.sheetUrl = j.sheetUrl || "";
-    if (j.statuses) j.statuses.forEach(s => SHEET_STATUS[skey(s)] = s);
-    if (j.priorities) j.priorities.forEach(p => SHEET_PRIO[pkey(p)] = p);
+    S.team = j.team || [];
     const leads = (j.leads || []).map(normalise);
     const fresh = S.firstLoad ? [] : leads.filter(l => !S.seen.has(l.ref));
     leads.forEach(l => S.seen.add(l.ref));
@@ -776,7 +774,6 @@ function renderSkeleton() {
 }
 function renderAll(flashRefs = []) {
   renderHello(); renderRail(); renderKpis(); renderCharts(); renderFilters(); renderRows(flashRefs);
-  $("#sheetLink").hidden = !S.sheetUrl; if (S.sheetUrl) $("#sheetLink").href = S.sheetUrl;
 }
 function renderHello() {
   const h = new Date().getHours();
@@ -1150,7 +1147,7 @@ function closeSheet(now) {
   sh.classList.remove("on"); $("#scrim").classList.remove("on"); document.body.style.overflow = "";
   S.open = null;
   setTimeout(() => { if (!S.open) sh.hidden = true; }, now ? 0 : 320);
-  $("#shNote").textContent = "Changes save to your Google Sheet."; $("#shSave").classList.remove("btn-call"); $("#shSave").classList.add("btn-primary");
+  resetNote(); $("#shSave").classList.remove("btn-call"); $("#shSave").classList.add("btn-primary");
 }
 $("#shClose").onclick = () => closeSheet(); $("#scrim").onclick = () => closeSheet();
 $("#shSave").onclick = async () => {
@@ -1169,7 +1166,7 @@ $("#shSave").onclick = async () => {
   btn.disabled = false; btn.textContent = "Save";
   if (ok) {
     closeSheet();
-    if (fields.status && d.s === "won") celebrate(l); else toast("Saved to your sheet.");
+    if (fields.status && d.s === "won") celebrate(l); else toast("Saved.");
   }
 };
 async function saveFields(l, fields) {
@@ -1201,6 +1198,41 @@ function toast(html, o = {}) {
   $("#toasts").appendChild(t);
   while ($("#toasts").children.length > 3) $("#toasts").firstChild.remove();
   setTimeout(() => t.remove(), o.ms || 4200);
+}
+
+
+/* Delete (with an in-page confirm) */
+function resetNote() { $("#shNote").innerHTML = '<button type="button" class="linkish" id="shDel" style="color:var(--bad)">Delete lead</button>'; }
+document.addEventListener("click", async e => {
+  if (e.target.id === "shDel") {
+    $("#shNote").innerHTML = 'Delete for good? <button type="button" class="linkish" id="shDelYes" style="color:var(--bad)">Yes, delete</button> · <button type="button" class="linkish" id="shDelNo">Keep</button>';
+  } else if (e.target.id === "shDelNo") resetNote();
+  else if (e.target.id === "shDelYes") {
+    const ref = S.open, l = S.leads.find(x => x.ref === ref);
+    try {
+      const j = await api("delete", { ref });
+      if (!j.ok) throw new Error(j.error || "Not deleted");
+      S.leads = S.leads.filter(x => x.ref !== ref); closeSheet(); renderAll(); toast((l ? esc(l.name) : "Lead") + " deleted.");
+    } catch (err) { toast("Not deleted: " + esc(err.message)); }
+  } else if (e.target.id === "outAll") {
+    if (S.demo) return toast("This works once you sign in for real.");
+    const b = e.target;
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Tap again to sign out every phone and laptop"; setTimeout(() => { b.dataset.sure = ""; b.textContent = "Sign out on all devices"; }, 5000); return; }
+    try { await api("signout-all"); } catch (_) {}
+    signOut(false); $("#loginErr").textContent = "Every device is signed out.";
+  }
+});
+
+/* Setup check on the sign-in screen */
+async function setupCheck() {
+  if (S.demo) return;
+  try {
+    const j = await (await fetch(API, { cache: "no-store" })).json();
+    const tips = [];
+    if (!j.storage) tips.push("Lead storage isn't connected yet (Vercel → Storage → Upstash Redis).");
+    if (!j.password) tips.push("No password set yet (Vercel → Settings → Environment Variables → DASHBOARD_PASSWORD).");
+    if (tips.length) $("#loginErr").innerHTML = "<b>Almost ready.</b> " + tips.map(esc).join(" ") + " Then redeploy.";
+  } catch (_) {}
 }
 
 /* ===== Sample leads (demo) ===== */
@@ -1264,7 +1296,7 @@ function demoApi(action, body) {
   const t = store.get("token") || store.get("token", sessionStorage);
   const exp = t ? Number(t.split(".")[0]) : 0;
   if (t && exp > Date.now()) { S.token = t; startApp(); }
-  else { store.del("token"); showLogin(); }
+  else { store.del("token"); showLogin(); setupCheck(); }
 })();
 </script>
 </body>
