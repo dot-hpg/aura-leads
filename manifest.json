@@ -1,0 +1,9 @@
+{
+  "name": "AURA Leads",
+  "short_name": "AURA Leads",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#07101B",
+  "theme_color": "#07101B",
+  "icons": [{ "src": "assets/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }]
+}
